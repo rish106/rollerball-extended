@@ -1,4 +1,4 @@
-CC=g++
+CC=g++ -ld_classic
 CFLAGS=-Wall -std=c++17 -O3 -funroll-loops -DASIO_STANDALONE
 
 INCLUDES=-Iinclude
