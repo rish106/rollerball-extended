@@ -10,6 +10,7 @@ class Engine : public AbstractEngine {
     // constructor.
     
     public:
+    int current_player = -1;
     void find_best_move(const Board& b) override;
 
 };
