@@ -3,7 +3,6 @@
 #include <queue>
 #include <random>
 #include <iostream>
-#include <thread>
 #include <climits>
 #include <unordered_map>
 #include <unordered_set>
@@ -23,17 +22,12 @@ const int MAX_PIECES = 10;
 const int PAWN_WEIGHT = 150;
 const int ROOK_WEIGHT = 600;
 const int BISHOP_WEIGHT = 400;
-const int KNIGHT_WEIGHT = 300;
+const int KNIGHT_WEIGHT = 350;
 const int KING_WEIGHT = 1500;
 const int CHECK_WEIGHT = 99;
 const int STALEMATE_WEIGHT = 1000;
 const int REPETITION_WEIGHT = 1000;
 // const int RING_WEIGHT = 20;
-
-const int CLOSE_PAWN_PROMO_WEIGHT = 250;
-const int MEDIUM_PAWN_PROMO_WEIGHT = 180;
-const int FAR_PAWN_PROMO_WEIGHT = 150;
-const int VERY_FAR_PAWN_PROMO_WEIGHT = 50;
 
 const int ROOK_DISTANCE_FACTOR = 40;
 const int PAWN_DISTANCE_FACTOR = 20;
@@ -58,9 +52,9 @@ int nodes_visited;
 int curr_player = -1;
 int point_distance;
 
-int PAWN_DISTANCE[64][64],
-    ROOK_DISTANCE[64][64],
-    KNIGHT_DISTANCE[64][64];
+int PAWN_DISTANCE[64][64];
+int ROOK_DISTANCE[64][64];
+int KNIGHT_DISTANCE[64][64];
 
 int PLAYER_WEIGHTS[MAX_PIECES] = {ROOK_WEIGHT, ROOK_WEIGHT, KING_WEIGHT, BISHOP_WEIGHT, PAWN_WEIGHT, PAWN_WEIGHT, PAWN_WEIGHT, PAWN_WEIGHT, KNIGHT_WEIGHT, KNIGHT_WEIGHT};
 int OPPONENT_WEIGHTS[MAX_PIECES] = {ROOK_WEIGHT, ROOK_WEIGHT, KING_WEIGHT, BISHOP_WEIGHT, PAWN_WEIGHT, PAWN_WEIGHT, PAWN_WEIGHT, PAWN_WEIGHT, KNIGHT_WEIGHT, KNIGHT_WEIGHT};
@@ -370,19 +364,19 @@ Evaluation eval(Board& b) {
             }
         }
         int winner_moves = ((int)previous_board_occurences.size() + 1) / 2;
-        victory -= 5 * (winner_moves / 20) + min(10, winner_moves);
+        victory -= (5 * (winner_moves / 20)) + min(10, winner_moves);
         victory *= 1000;
         return victory;
     };
 
     auto modify_pawn_weights = [&](U8* pieces, int* piece_weights, U8 promo_pos) {
         for (int i = 4; i < 8; i++) {
-            if (pieces[i] == DEAD) {
-                piece_weights[i] = PAWN_WEIGHT;
-            } else if (b.data.board_0[pieces[i]] & ROOK) {
+            if (b.data.board_0[pieces[i]] & ROOK) {
                 piece_weights[i] = ROOK_WEIGHT;
             } else if (b.data.board_0[pieces[i]] & BISHOP) {
                 piece_weights[i] = BISHOP_WEIGHT;
+            } else if (b.data.board_0[pieces[i]] & KNIGHT) {
+                piece_weights[i] = KNIGHT_WEIGHT;
             } else {
                 piece_weights[i] = PAWN_WEIGHT;
                 int piece_y = gety(pieces[i]);
@@ -390,11 +384,11 @@ Evaluation eval(Board& b) {
                 int pawn_distance = PAWN_DISTANCE[pieces[i]][promo_pos];
                 int promo_score;
                 if (distance_y <= 1) {
-                    promo_score = CLOSE_PAWN_PROMO_WEIGHT / (1 + pawn_distance);
+                    promo_score = 250 / (1 + pawn_distance);
                 } else if (distance_y <= 3){
-                    promo_score = MEDIUM_PAWN_PROMO_WEIGHT / (1 + pawn_distance);
+                    promo_score = 180 / (1 + pawn_distance);
                 } else {
-                    promo_score = FAR_PAWN_PROMO_WEIGHT / (1 + pawn_distance);
+                    promo_score = 150 / (1 + pawn_distance);
                 }
                 piece_weights[i] += promo_score;
             }
@@ -522,10 +516,10 @@ Evaluation eval(Board& b) {
             }
             if (b.data.board_0[pieces[i]] & ROOK) {
                 distance = ROOK_DISTANCE[pieces[i]][enemy_king];
-                king_distance_score += piece_weights[i] / (ROOK_DISTANCE_FACTOR + COMMON_DISTANCE_FACTOR * distance);
+                king_distance_score += piece_weights[i] / (40 + 10 * distance);
             } else if (b.data.board_0[pieces[i]] & KNIGHT) {
                 distance = KNIGHT_DISTANCE[pieces[i]][enemy_king];
-                king_distance_score += piece_weights[i] / (PAWN_DISTANCE_FACTOR + COMMON_DISTANCE_FACTOR * distance);
+                king_distance_score += piece_weights[i] / (20 + 10 * distance);
             } else if (b.data.board_0[pieces[i]] & BISHOP) {
                 U8 bishop_x = getx(pieces[i]);
                 U8 bishop_y = gety(pieces[i]);
@@ -536,10 +530,10 @@ Evaluation eval(Board& b) {
                 } else {
                     distance = 10000;
                 }
-                king_distance_score += piece_weights[i] / (PAWN_DISTANCE_FACTOR + COMMON_DISTANCE_FACTOR * distance);
+                king_distance_score += piece_weights[i] / (20 + 10 * distance);
             } else {
                 distance = PAWN_DISTANCE[pieces[i]][enemy_king];
-                king_distance_score += piece_weights[i] / (PAWN_DISTANCE_FACTOR + COMMON_DISTANCE_FACTOR * distance);
+                king_distance_score += piece_weights[i] / (20 + 10 * distance);
             }
         }
         return king_distance_score;
@@ -615,7 +609,9 @@ bool is_better_eval(Evaluation& eval1, Evaluation& eval2, bool maximizing_player
 
 Evaluation minimax(Board& board, int depth, bool maximizing_player, vector<Board*> &visited, int alpha, int beta, chrono::time_point<chrono::system_clock> end_time) {
     Evaluation best_eval;
-    if (previous_board_occurences[board_to_str(&board.data)] == 2) {
+    if (previous_board_occurences.find(board_to_str(&board.data)) == previous_board_occurences.end()) {
+        // do nothing
+    } else if (previous_board_occurences[board_to_str(&board.data)] == 2) {
         best_eval.total = (maximizing_player ? 1 : -1) * REPETITION_WEIGHT;
         return best_eval;
     }
@@ -674,7 +670,7 @@ bool is_end_game(const Board& b) {
 
     int white_alive = 0;
     int black_alive = 0;
-    
+
     for (int i = 0; i < MAX_PIECES; i++) {
         if (white_pieces[i] != DEAD && !(b.data.board_0[white_pieces[i]] & PAWN)) {
             white_alive++;
@@ -709,6 +705,8 @@ void Engine::find_best_move(const Board& b) {
     Board* board_copy = new Board(b);
     double current_eval = eval(*board_copy).total;
     int base_time = (b.data.board_type == SEVEN_THREE ? 4000 : 4000);
+    cout << "number of moves till now: " << previous_board_occurences.size() - 1 << endl;
+    cout << "is end game: " << is_end_game(b) << endl;
     if (previous_board_occurences.size() > 15 && !is_end_game(b)) {
         base_time = (b.data.board_type == SEVEN_THREE ? 5000 : 5000);
     }
@@ -723,7 +721,7 @@ void Engine::find_best_move(const Board& b) {
         return;
     }
     auto end_time = start_time + chrono::milliseconds(
-        base_time / 2 + (int)((remaining_time / total_time) * (base_time / 2.0 + 4 * (abs(current_eval) - current_eval)))
+        base_time / 2 + (int)((remaining_time / total_time) * (base_time + 4 * (abs(current_eval) - current_eval)))
     );
     int max_depth_visited = 0;
     for (int depth = MIN_SEARCH_DEPTH - 1; depth < MAX_SEARCH_DEPTH && (chrono::high_resolution_clock::now() < end_time); depth++) {
@@ -753,7 +751,7 @@ void Engine::find_best_move(const Board& b) {
                 }
                 nodes_visited++;
                 Evaluation new_eval = minimax(*new_board, QUIESCENCE_DEPTH, (eval.depth % 2 == 0), visited, INT_MIN, INT_MAX, end_time);
-                if (new_eval.total - eval.total >= -100 || best_eval.total == INT_MIN) {
+                if (new_eval.total - eval.total >= 0 || best_eval.total == INT_MIN) {
                     best_eval = eval;
                     this->best_move = move;
                     alpha = eval.total;
@@ -764,16 +762,16 @@ void Engine::find_best_move(const Board& b) {
     }
     cout << board_to_str(&board_copy->data) << endl;
     cout << "Move sequence: " << move_to_str(best_move) << ' ';
-    for (int it = 0; it < best_eval.moves.size(); it++) {
-        cout << move_to_str(best_eval.moves[it]) << " \n"[it == best_eval.moves.size()-1];
+    for (int it = best_eval.moves.size() - 1; it >= 0; it--) {
+        cout << move_to_str(best_eval.moves[it]) << " \n"[it == 0];
     }
     end_time = chrono::high_resolution_clock::now();
     board_copy->do_move_(best_move);
     previous_board_occurences[board_to_str(&board_copy->data)]++;
-    // eval(*board_copy).print();
+    eval(*board_copy).print();
     delete board_copy;
     // best_eval.print();
     cout << "found best move in " << chrono::duration_cast<chrono::duration<double>>(end_time - start_time).count() << " seconds" << endl;
     cout << "nodes visited " << nodes_visited << endl;
-    // cout << "max depth reached " << max_depth_visited << endl;
+    cout << "max depth reached " << max_depth_visited << endl;
 }
