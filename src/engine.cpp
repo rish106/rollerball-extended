@@ -5,7 +5,6 @@
 #include <iostream>
 #include <climits>
 #include <unordered_map>
-#include <unordered_set>
 
 using namespace std;
 
@@ -13,9 +12,11 @@ using namespace std;
 #include "engine.hpp"
 #include "butils.hpp"
 
+int moves_played;
+
 int MIN_SEARCH_DEPTH = 2;
-int MAX_SEARCH_DEPTH = 6;
-const int QUIESCENCE_DEPTH = 2;
+int MAX_SEARCH_DEPTH = 8;
+int QUIESCENCE_DEPTH = 2;
 
 const int MAX_PIECES = 10;
 
@@ -107,10 +108,6 @@ struct Evaluation {
         cout << "total          " << total << '\n';
     }
 };
-
-void flip_player(Board& b) {
-    b.data.player_to_play = (PlayerColor)(b.data.player_to_play ^ (WHITE | BLACK));
-}
 
 void init_quadrant_map(BoardType board_type) {
     if (board_type == SEVEN_THREE) {
@@ -261,36 +258,31 @@ int get_rook_distance(U8 rook_pos, U8 final_pos) {
 }
 
 int get_knight_distance(U8 knight_pos, U8 final_pos) {
-    vector<pair<int, int>> moves = {
+    vector<pair<int, int>> knight_moves = {
         {-1, -2}, {-2, -1}, {-2, 1}, {-1, 2},
         {1, -2}, {2, -1}, {2, 1}, {1, 2}
     };
-
     const int size = 8;
-    vector<vector<int>> chessboard(size, vector<int>(size, -1));
-
-    // Use BFS to find the minimum number of moves
+    int chessboard[8][8];
+    for (int i = 0; i < size; i++) {
+        for (int j = 0; j < size; j++) {
+            chessboard[i][j] = -1;
+        }
+    }
     queue<U8> q;
     q.push(knight_pos);
-    chessboard[getx(knight_pos)][gety(knight_pos)] = 0; // Initial position has 0 moves
-
+    chessboard[getx(knight_pos)][gety(knight_pos)] = 0;
     while (!q.empty()) {
         U8 current = q.front();
         q.pop();
-
         if (current == final_pos) {
-            // Reached the destination
             return chessboard[getx(current)][gety(current)];
         }
-
-        // Explore possible moves
-        for (const auto& move : moves) {
+        for (const auto& move : knight_moves) {
             U8 new_x = getx(current) + move.first;
             U8 new_y = gety(current) + move.second;
-
             if (new_x >= 0 && new_x < size && new_y >= 0 && new_y < size &&
                 (new_x < 3 || new_x > 4 || new_y < 3 || new_y > 4) && chessboard[new_x][new_y] == -1) {
-                // Valid move and not visited yet
                 chessboard[new_x][new_y] = chessboard[getx(current)][gety(current)] + 1;
                 q.push(pos(new_x, new_y));
             }
@@ -301,9 +293,9 @@ int get_knight_distance(U8 knight_pos, U8 final_pos) {
 
 void init_distances(BoardType board_type) {
     int board_length = 8;
-    if (board_type == SEVEN_THREE) {
-        board_length = 7;
-    }
+    // if (board_type == SEVEN_THREE) {
+    //     board_length = 7;
+    // }
     int board_squares = board_length * board_length;
     for (int i = 0; i < board_squares; i++) {
         for (int j = 0; j < board_squares; j++) {
@@ -331,9 +323,9 @@ Evaluation eval(Board& b) {
 
     unordered_set<U16> player_moves, opponent_moves;
     (curr_player == b.data.player_to_play ? player_moves : opponent_moves) = b.get_legal_moves();
-    flip_player(b);
+    b.flip_player_();
     (curr_player == b.data.player_to_play ? player_moves : opponent_moves) = b.get_legal_moves();
-    flip_player(b);
+    b.flip_player_();
 
     Evaluation score;
 
@@ -363,7 +355,7 @@ Evaluation eval(Board& b) {
                 victory -= MARGIN_PAWN_WEIGHT;
             }
         }
-        int winner_moves = ((int)previous_board_occurences.size() + 1) / 2;
+        int winner_moves = (moves_played + 1) / 2;
         victory -= (5 * (winner_moves / 20)) + min(10, winner_moves);
         victory *= 1000;
         return victory;
@@ -382,21 +374,21 @@ Evaluation eval(Board& b) {
                 int piece_y = gety(pieces[i]);
                 int distance_y = min(abs(piece_y - gety(promo_pos)), abs(piece_y - gety(promo_pos) - 1));
                 int pawn_distance = PAWN_DISTANCE[pieces[i]][promo_pos];
-                int promo_score;
+                int promo_weight;
                 if (distance_y <= 1) {
-                    promo_score = 250 / (1 + pawn_distance);
+                    promo_weight = 150 / (1 + pawn_distance);
                 } else if (distance_y <= 3){
-                    promo_score = 180 / (1 + pawn_distance);
+                    promo_weight = 100 / (1 + pawn_distance);
                 } else {
-                    promo_score = 150 / (1 + pawn_distance);
+                    promo_weight = 80 / (1 + pawn_distance);
                 }
-                piece_weights[i] += promo_score;
+                piece_weights[i] += promo_weight;
             }
         }
     };
 
-    modify_pawn_weights(player_pieces, PLAYER_WEIGHTS, player_promo);
-    modify_pawn_weights(opponent_pieces, OPPONENT_WEIGHTS, opponent_promo);
+    // modify_pawn_weights(player_pieces, PLAYER_WEIGHTS, player_promo);
+    // modify_pawn_weights(opponent_pieces, OPPONENT_WEIGHTS, opponent_promo);
 
     auto add_piece_score = [&]() {
         for (int i = 0; i < MAX_PIECES; i++) {
@@ -410,19 +402,22 @@ Evaluation eval(Board& b) {
     };
 
     auto add_attack_score = [&]() {
-        for (auto move : player_moves) {
-            U8 final_pos = getp1(move);
-            for (int i = 0; i < MAX_PIECES; i++) {
-                if (final_pos == opponent_pieces[i] && !(b.data.board_0[opponent_pieces[i]] & KING)) {
-                    score.attack += OPPONENT_WEIGHTS[i] / ATTACKING_FACTOR;
+        if (b.data.player_to_play == curr_player) {
+            for (auto move : player_moves) {
+                U8 final_pos = getp1(move);
+                for (int i = 0; i < MAX_PIECES; i++) {
+                    if (final_pos == opponent_pieces[i] && !(b.data.board_0[opponent_pieces[i]] & KING)) {
+                        score.attack += OPPONENT_WEIGHTS[i] / ATTACKING_FACTOR;
+                    }
                 }
             }
-        }
-        for (auto move : opponent_moves) {
-            U8 final_pos = getp1(move);
-            for (int i = 0; i < MAX_PIECES; i++) {
-                if (final_pos == player_pieces[i] && !(b.data.board_0[player_pieces[i]] & KING)) {
-                    score.attack -= PLAYER_WEIGHTS[i] / DEFENDING_FACTOR;
+        } else {
+            for (auto move : opponent_moves) {
+                U8 final_pos = getp1(move);
+                for (int i = 0; i < MAX_PIECES; i++) {
+                    if (final_pos == player_pieces[i] && !(b.data.board_0[player_pieces[i]] & KING)) {
+                        score.attack -= PLAYER_WEIGHTS[i] / DEFENDING_FACTOR;
+                    }
                 }
             }
         }
@@ -443,9 +438,8 @@ Evaluation eval(Board& b) {
 
     auto calc_promo_score = [&](U8* pieces, U8 promo_pos) {
         int promo_score = 0;
-        U8 promo_pos_y = gety(promo_pos);
-        U8 piece_y;
-        int distance_y, pawn_distance;
+        int promo_pos_y = gety(promo_pos);
+        int piece_y, distance_y, pawn_distance;
         vector<int> promo_scores;
         for (int i = 4; i < 8; i++) {
             if (pieces[i] == DEAD || !(b.data.board_0[pieces[i]] & PAWN)) {
@@ -453,15 +447,15 @@ Evaluation eval(Board& b) {
             }
             piece_y = gety(pieces[i]);
             distance_y = min(abs(piece_y - promo_pos_y), abs(piece_y - promo_pos_y - 1));
-            pawn_distance = PAWN_DISTANCE[pieces[i]][promo_pos];
+            pawn_distance = PAWN_DISTANCE[(int)pieces[i]][(int)promo_pos];
             if (distance_y <= 1) {
-                promo_score = 120 / (1 + pawn_distance);
+                promo_score = 240 / (1 + pawn_distance);
             } else if (distance_y <= 3){
-                promo_score = 100 / (1 + pawn_distance);
+                promo_score = 200 / (1 + pawn_distance);
             } else if (pawn_distance < 10) {
-                promo_score = 50 / (1 + pawn_distance);
+                promo_score = 100 / (1 + pawn_distance);
             } else {
-                promo_score = 30 / (1 + pawn_distance);
+                promo_score = 60 / (1 + pawn_distance);
             }
             promo_scores.push_back(promo_score);
         }
@@ -492,7 +486,7 @@ Evaluation eval(Board& b) {
             }
             promo_score = 0;
             if (min_promo != INT_MAX) {
-                promo_score += (max_promo + 10 * min_promo) / 11;
+                promo_score += ((max_promo + 10 * min_promo) / 11);
             }
             min_promo = INT_MAX;
             max_promo = INT_MIN;
@@ -501,7 +495,7 @@ Evaluation eval(Board& b) {
                 max_promo = max(max_promo, promo_scores[i]);
             }
             if (min_promo != INT_MAX) {
-                promo_score += (max_promo + 10 * min_promo) / 11;
+                promo_score += ((max_promo + 10 * min_promo) / 11);
             }
         }
         return promo_score;
@@ -515,10 +509,10 @@ Evaluation eval(Board& b) {
                 continue;
             }
             if (b.data.board_0[pieces[i]] & ROOK) {
-                distance = ROOK_DISTANCE[pieces[i]][enemy_king];
+                distance = ROOK_DISTANCE[(int)pieces[i]][(int)enemy_king];
                 king_distance_score += piece_weights[i] / (40 + 10 * distance);
             } else if (b.data.board_0[pieces[i]] & KNIGHT) {
-                distance = KNIGHT_DISTANCE[pieces[i]][enemy_king];
+                distance = KNIGHT_DISTANCE[(int)pieces[i]][(int)enemy_king];
                 king_distance_score += piece_weights[i] / (20 + 10 * distance);
             } else if (b.data.board_0[pieces[i]] & BISHOP) {
                 U8 bishop_x = getx(pieces[i]);
@@ -526,13 +520,13 @@ Evaluation eval(Board& b) {
                 U8 king_x = getx(enemy_king);
                 U8 king_y = gety(enemy_king);
                 if (((bishop_x + bishop_y) % 2) == ((king_x + king_y) % 2)) {
-                    distance = PAWN_DISTANCE[pieces[i]][enemy_king];
+                    distance = PAWN_DISTANCE[(int)pieces[i]][(int)enemy_king];
                 } else {
                     distance = 10000;
                 }
                 king_distance_score += piece_weights[i] / (20 + 10 * distance);
             } else {
-                distance = PAWN_DISTANCE[pieces[i]][enemy_king];
+                distance = PAWN_DISTANCE[(int)pieces[i]][(int)enemy_king];
                 king_distance_score += piece_weights[i] / (20 + 10 * distance);
             }
         }
@@ -607,6 +601,23 @@ bool is_better_eval(Evaluation& eval1, Evaluation& eval2, bool maximizing_player
     return res;
 }
 
+bool is_killer_move(U16 move, Board &b) {
+    U8 white_pieces[MAX_PIECES] = {b.data.w_rook_1, b.data.w_rook_2, b.data.w_king, b.data.w_bishop, b.data.w_pawn_1,
+                            b.data.w_pawn_2, b.data.w_pawn_3, b.data.w_pawn_4, b.data.w_knight_1, b.data.w_knight_2};
+    U8 black_pieces[MAX_PIECES] = {b.data.b_rook_1, b.data.b_rook_2, b.data.b_king, b.data.b_bishop, b.data.b_pawn_1,
+                            b.data.b_pawn_2, b.data.b_pawn_3, b.data.b_pawn_4, b.data.b_knight_1, b.data.b_knight_2};
+
+    U8* enemy_pieces = (b.data.player_to_play == WHITE ? black_pieces : white_pieces);
+
+    U8 final_pos = getp1(move);
+    for (int i = 0; i < MAX_PIECES; i++) {
+        if (final_pos == enemy_pieces[i]) {
+            return true;
+        }
+    }
+    return false;
+}
+
 Evaluation minimax(Board& board, int depth, bool maximizing_player, vector<Board*> &visited, int alpha, int beta, chrono::time_point<chrono::system_clock> end_time) {
     Evaluation best_eval;
     if (previous_board_occurences.find(board_to_str(&board.data)) == previous_board_occurences.end()) {
@@ -627,6 +638,7 @@ Evaluation minimax(Board& board, int depth, bool maximizing_player, vector<Board
     for (auto iter = player_moveset.begin(); iter != player_moveset.end() && (chrono::high_resolution_clock::now() < end_time); iter++) {
         auto move = *iter;
         Board* new_board = new Board(board);
+
         new_board->do_move_(move);
         bool is_visited_board = false;
         for (Board* b : visited) {
@@ -686,15 +698,18 @@ bool is_end_game(const Board& b) {
 void Engine::find_best_move(const Board& b) {
     start_time = chrono::high_resolution_clock::now();
     if (this->current_player == -1) {
+        moves_played = 0;
         previous_board_occurences.clear();
         total_time = this->time_left.count();
-        this->current_player = curr_player = b.data.player_to_play;
-        init_promo(b.data.board_type);
+        this->current_player = b.data.player_to_play;
+        curr_player = b.data.player_to_play;
         init_quadrant_map(b.data.board_type);
+        init_promo(b.data.board_type);
         init_distances(b.data.board_type);
     }
     double remaining_time = this->time_left.count();
     previous_board_occurences[board_to_str(&b.data)]++;
+    moves_played++;
     Evaluation best_eval;
     best_eval.total = INT_MIN;
     best_eval.depth = MAX_SEARCH_DEPTH;
@@ -704,25 +719,32 @@ void Engine::find_best_move(const Board& b) {
     nodes_visited = 0;
     Board* board_copy = new Board(b);
     double current_eval = eval(*board_copy).total;
-    int base_time = (b.data.board_type == SEVEN_THREE ? 4000 : 4000);
-    cout << "number of moves till now: " << previous_board_occurences.size() - 1 << endl;
-    cout << "is end game: " << is_end_game(b) << endl;
-    if (previous_board_occurences.size() > 15 && !is_end_game(b)) {
-        base_time = (b.data.board_type == SEVEN_THREE ? 5000 : 5000);
+    int base_time = (b.data.board_type == EIGHT_TWO ? 4000 : 2500);
+    bool end_game = is_end_game(b);
+    cout << "number of moves till now: " << moves_played - 1 << endl;
+    cout << "is end game: " << end_game << endl;
+    if (end_game) {
+        base_time = (b.data.board_type == EIGHT_TWO ? 3500 : 2000);
+    } else if (moves_played > 15) {
+        base_time = (b.data.board_type == EIGHT_TWO ? 5000 : 3000);
     }
     if (b.data.board_type == SEVEN_THREE) {
         ATTACKING_FACTOR = 6;
         DEFENDING_FACTOR = 4;
     } else {
-        ATTACKING_FACTOR = 4;
-        DEFENDING_FACTOR = 4;
+        ATTACKING_FACTOR = 8;
+        DEFENDING_FACTOR = 8;
     }
     if (player_moveset.empty()) {
+        eval(*board_copy).print();
         return;
     }
-    auto end_time = start_time + chrono::milliseconds(
+    int move_time = min(
+        int(remaining_time * 0.1),
         base_time / 2 + (int)((remaining_time / total_time) * (base_time + 4 * (abs(current_eval) - current_eval)))
     );
+    // int move_time = int(remaining_time);
+    auto end_time = start_time + chrono::milliseconds(move_time);
     int max_depth_visited = 0;
     for (int depth = MIN_SEARCH_DEPTH - 1; depth < MAX_SEARCH_DEPTH && (chrono::high_resolution_clock::now() < end_time); depth++) {
         int alpha = INT_MIN;
@@ -768,6 +790,7 @@ void Engine::find_best_move(const Board& b) {
     end_time = chrono::high_resolution_clock::now();
     board_copy->do_move_(best_move);
     previous_board_occurences[board_to_str(&board_copy->data)]++;
+    moves_played++;
     eval(*board_copy).print();
     delete board_copy;
     // best_eval.print();
